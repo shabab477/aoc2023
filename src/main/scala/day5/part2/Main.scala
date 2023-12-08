@@ -3,17 +3,19 @@ package day5.part2
 
 
 import java.security.InvalidParameterException
-import java.util.concurrent.atomic.AtomicLong
-import scala.collection.immutable
 import scala.collection.immutable.ListMap
-import scala.io.Source
-import scala.util.{Failure, Success, Using}
 import scala.collection.parallel.CollectionConverters._
 import scala.concurrent.duration.Duration
-import scala.concurrent.{Await, ExecutionContext, ExecutionContextExecutor, Future}
+import scala.concurrent.{Await, ExecutionContextExecutor, Future}
+import scala.io.Source
+import scala.util.{Failure, Using}
 
 //noinspection Duplicates
+// Takes ~8 mins with the following JVM args:
+// -Xmx8g -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:G1HeapRegionSize=2 -XX:ParallelGCThreads=8 -XX:ConcGCThreads=8 -XX:+UseCompressedOops
+// Profiler says less than 4G memory used max. Can experiment with batchSize value
 object Main extends App {
+
   val process = Using(Source.fromResource("day5_p2.txt")) { source =>
     val listOfSeedToSoil = Seq[AToB]()
     val listOfSoilToFertilizer = List[AToB]()
@@ -66,128 +68,61 @@ object Main extends App {
     val seedRanges = inputAccum._2.grouped(2).toList
     val inputMap = inputAccum._3
 
-    val totalLength = seedRanges.map {
-      case List(_, length) => length
-    }.sum
 
-    val answer = seedRanges.par.foldLeft((Long.MaxValue, 0L)) { case ((currentMin, progress), List(seed, length)) =>
-      val calculatedMin = LazyList.iterate[Long](seed)(_ + 1).takeWhile(_ < seed + length).foldLeft((Long.MaxValue, 0)) {
-        case ((currentRangeMin, rangeCount), seedInRange) =>
+    implicit val ec: ExecutionContextExecutor = scala.concurrent.ExecutionContext.global
 
-          val newMin = inputMap.foldLeft(seedInRange) { case (current, (_, v)) =>
+    val answer = seedRanges.foldLeft((Long.MaxValue, 0L)) { case ((currentMin, progress), List(seed, length)) =>
 
-            v.find(_.isValueWithinSource(current)).map { a2b =>
+      val iterationsNeeded = length
+      val batchSize = 100_00
 
-              a2b.getDestination(current)
-            }.getOrElse(current)
+      val batchStep = iterationsNeeded / batchSize
+
+      val seedRangeMin = Seq.range(0, batchStep + 1).par.map { c =>
+        val start = seed + (batchSize * c)
+        val end = Math.min(start + batchSize, seed + length)
+
+        val calculatedMin = LazyList.iterate[Long](start)(_ + 1).takeWhile(_ < end).foldLeft(Future.successful(Long.MaxValue, 0)) {
+          case (future, seedInRange) =>
+
+            future.map { case (currentRangeMin, rangeCount) =>
+              val newMin = inputMap.foldLeft(seedInRange) { case (current, (_, v)) =>
+
+                v.find(_.isValueWithinSource(current)).map { a2b =>
+
+                  a2b.getDestination(current)
+                }.getOrElse(current)
+              }
+
+              val answerMin = Math.min(newMin, Math.min(currentRangeMin, currentMin))
+              val progressedMade = rangeCount + 1
+
+              (answerMin, progressedMade)
+            }
+        }
+
+        Await.result(calculatedMin, Duration.Inf) match {
+          case (min, _) => {
+
+            min
           }
+        }
+      }
 
-          val answerMin = Math.min(newMin, Math.min(currentMin, currentRangeMin))
-          val progressedMade = rangeCount + 1
-          println(s"Progress: ${((progressedMade) / totalLength.toFloat) * 100}%")
+      val out = (seedRangeMin.min, progress + length)
 
-          (answerMin, progressedMade)
-      }._1
-
-      val out = (calculatedMin, progress + length)
-
-      println(s"Progress: ${((out._2) / totalLength.toFloat) * 100}%")
       out
     }
 
     println(answer._1)
 
-//    val answer = lazySeeder.grouped(batchSize)
-//      .zipWithIndex
-//      .map { case (batchedList, batchCount) =>
-//        val futures = batchedList.map { num =>
-//          Future {
-//            seedRanges.exists { case Seq(seed, length) =>
-//
-//              val start = seed
-//              val endExcluding = seed + length
-//
-//              start <= num && num < endExcluding
-//            }
-//          }.map { doesExist =>
-//            if (doesExist) {
-//              inputMap.foldLeft(num) { case (current, (_, v)) =>
-//
-//                v.find(_.isValueWithinSource(current)).map { a2b =>
-//
-//                  a2b.getDestination(current)
-//                }.getOrElse(current)
-//              }
-//            } else {
-//              minMaxValue._2
-//            }
-//          }
-//        }.foldLeft(Future.successful(minMaxValue._2)) { case (x, y) =>
-//          for {
-//            currentNum <- x
-//            otherNum <- y
-//          } yield {
-//            if (currentNum < otherNum) {
-//              currentNum
-//            } else {
-//              otherNum
-//            }
-//          }
-//        }
-//
-//        val result = Await.ready(futures, Duration.Inf).value.get
-//
-//        println(s"Finished processing: batch: ${batchCount + 1}, Progress: ${((batchCount + 1) / batchStep.toFloat) * 100}%")
-//        result match {
-//          case Success(value) => value
-//          case Failure(exception) =>
-//            exception.printStackTrace()
-//            throw exception
-//        }
-//      }.foldLeft(minMaxValue._2) { case (x, y) =>
-//        if (x < y) x else y
-//      }
-//
-//    println(answer)
-
   }
-  //    val test = lazySeeder.par.filter { num =>
-  //      seedRanges.exists { case Seq(seed, length) =>
-  //
-  //        val start = seed
-  //        val endExcluding = seed + length
-  //
-  //        start >= num && num < endExcluding
-  //      }
-  //    }
-  //
-  //    println(test.min)
 
-  //    val answer = seeds.grouped(2).toList.par.map {
-  //      case Seq(start, length) =>
-  //
-  //        (start, start + length)
-  //      case _ => throw  new InvalidParameterException()
-  //    }.map { case (from, toExcluding) =>
-  //
-  //      LazyList.range(from, toExcluding, 1).par.map { seed =>
-  //
-  //        inputMap.foldLeft(seed) { case (current, (_, v)) =>
-  //
-  //          v.find(_.isValueWithinSource(current)).map { a2b =>
-  //
-  //            a2b.getDestination(current)
-  //          }.getOrElse(current)
-  //        }
-  //      }.min
-  //    }.min
 
-  //    println(answer)
-
-    process match {
-      case Failure(exception) => exception.printStackTrace()
-      case _ =>
-    }
+  process match {
+    case Failure(exception) => exception.printStackTrace()
+    case _ =>
+  }
 }
 
 case class AToB(a: Long, b: Long, step: Long) {
@@ -196,7 +131,7 @@ case class AToB(a: Long, b: Long, step: Long) {
     val start = a
     val end = start + step
 
-    start <= num && num <= end
+    start <= num && num < end
   }
 
   def getDestination(num: Long): Long = {

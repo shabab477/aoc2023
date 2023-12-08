@@ -84,7 +84,7 @@ case class AToB(a: Long, b: Long, step: Long) {
     val start = a
     val end = start + step
 
-    start <= num && num <= end
+    start <= num && num < end
   }
 
   def getDestination(num: Long): Long = {
